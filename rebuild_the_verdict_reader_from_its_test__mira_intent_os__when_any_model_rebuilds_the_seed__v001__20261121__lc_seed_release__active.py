@@ -14,7 +14,8 @@ into a verdict per item number. It is a deterministic pre-check: it never guesse
 
 The rules, in the order the reader applies them. Every match is case-insensitive.
 
-1. Typos. fix_approve_typos(text) looks at each run of letters A-Z. A run one typed letter off "approve" or
+1. Typos. fix_approve_typos(text) looks at each run of letters A-Z, upper or lower case alike, so "apprpveIKID" is
+   one run and stays as typed. A run one typed letter off "approve" or
    "approved" (compared in lower case: one letter wrong, missing or extra, or two neighbouring letters swapped)
    becomes "approve". The real approve words and "approval", "approvals", "approver", "approvers" stay as typed.
    Two typed letters off is no typo ("aprvoe", "pprovd"); neither is "improve", "reprove" or "unapprove".
@@ -28,27 +29,39 @@ The rules, in the order the reader applies them. Every match is case-insensitive
    to letters ("approvepush", "1approvepush") is not unglued, and it is no verdict word.
 3. Verdict words are whole words. Approve words: approve, approved, approves, approving. Deny words: reject...,
    deny, denied, denies, hold, holding, skip..., no, nope, not, never, don't, dont, drop..., declin..., unapprov...,
-   disapprov... ("..." means any letters may follow). Each keeps the spelling it has after rules 1-2. The whole
-   word must be one of these spellings; only the six stems written with "..." may go on. So any other word that
+   disapprov... ("..." marks a stem: any letters, digits or "_" may follow, so "skip..." covers "skip", "skips",
+   "skipper" and "skipper8", not just a list of forms). Each keeps the spelling it has after rules
+   1-2. The whole word must be one of these spellings, with a word edge (a regular expression's word boundary) on each side;
+   only the six stems written with "..." may go on. So any other word that
    merely starts like a deny word is no verdict word ("now", "none", "noticed", "nothing", "note", "holder",
-   "denying", "denial", "nevermind", "donate"), while "skipper", "dropbox" and "rejection" are deny words.
+   "denying", "denial", "nevermind", "donate", "hold_on", "no_way", "approve_it"), while "skipper", "dropbox",
+   "rejection", "skipper8", "dropped3" and "drop_it" are deny words, each read whole ("skipper8" names no 8).
 4. Item numbers. An item number is 1 to 3 digits read as an int, so 0 is an item number too ("0 approve",
-   "approve 00" and "007" read 0, 0 and 7). It is optionally typed after "#" ("#3"), or a range "8-12", which gives
+   "approve 00" and "007" read 0, 0 and 7). It is optionally typed right after "#" with no space ("#3"; in "# 3"
+   that "#" is plain text), or a range "8-12", which gives
    every number in it when the second is larger than the first by at most 20. Any other range gives no number at
-   all, not even its first number ("8-30", "12-8" and "3-3" give none). An item number is never part of a word,
+   all, not even its first number ("8-30", "12-8" and "3-3" give none). That holds for every range of two
+   item-number-shaped parts. Only when the part after "-" is no item number at all (4 or more digits) is the text
+   no range: "8-1230" reads just 8, because "1230" is too long to be an item number and a "-" may follow a number.
+   An item number is never part of a word,
    a longer number, a decimal, a time, a size, a price or a path: the character right before it is not a letter,
    digit, "_", ".", ":", "$", "%", "/", "@" or "-", and the character right after it is not a letter, digit, "_",
    "%" or "/", nor a "." or ":" followed by a digit. "3." and "3)" are item numbers; "22:15", "1.5", "5%", "v2"
    and "0970" are not.
-5. Groups. Item numbers joined only by spaces, commas, "&", "+", "/" or the word "and" form one group ("1,2,3",
-   "1 and 2"). Any other text between two numbers starts a new group. A "#" belongs to the number right after it
+5. Groups. Item numbers joined only by spaces, commas, "&", "+", "/" or the word "and", in any mix, form one group
+   ("1,2,3", "1 and 2", "1, and 2"). Any other text between two numbers starts a new group. A "#" belongs to the number right after it
    only when the character before that "#" passes rule 4's "right before" check (or the "#" starts the row);
-   otherwise the "#" is plain text. So "#6 and #7", "#1, #2, #3" and "#1 #2" are each one group, while in "#1#2"
-   and "1#2" the second "#" follows a digit, so it is plain text between 1 and 2 and they are two groups.
+   otherwise the "#" is plain text. A "#" that belongs to a number is part of that number's match, so in
+   "#6 and #7" only " and " sits between 6 and 7, and "#6 and #7", "#1, #2, #3" and "#1 #2" are each one group.
+   In "#1#2" and "1#2" the second "#" follows a digit, so it is plain text between 1 and 2 and they are two
+   groups; "1 # 2" is two groups too. (Putting rule 4's "right before" check on the "#" itself, as a lookbehind in
+   front of the optional "#", does this.)
 6. Touching. A word's next group is the first group that starts after the word ends; its previous group is the
    last group that ends before the word starts. (A group never counts as both.) The word touches its next group
    when the text between them is only spaces, the words "the", "item", "items", "number", "numbers" (each followed
-   by a space) and a final "#" ("reject items 4 and 5", "approve #6", "approve 1"). It touches its previous group
+   by a space) and a final "#" right before the number, or nothing at all ("reject items 4 and 5", "approve #6",
+   "approve 1", "approve#3"; in "approve # 4" a space follows the "#", so approve does not touch 4).
+   It touches its previous group
    when the text between them is only spaces and these eight characters, each taken literally: comma, full stop,
    colon, semicolon, ")", "]", "#" and "-" ("3. hold", "4) reject", "5 - deny", "2 approve"). (In a regular
    expression character class, "]" and "-" must be escaped to be taken literally.) In "approve all - 4" approve does not touch 4,
@@ -70,12 +83,14 @@ The rules, in the order the reader applies them. Every match is case-insensitive
 9. Verdicts. A group takes the first verdict word that names it: each of its numbers reads {"verdict": "approve"}
    or {"verdict": "deny"} with "word" set to that word. A number no word names reads {"verdict": "none",
    "word": None}. A number in two groups keeps its first group's verdict. verdicts is keyed by int.
-10. "all" is true when an approve word is followed by "all" (or "them all", "these all", "it all"), or "all" is
+10. Here an approve word is exactly one of its four spellings, never a longer word ("approvedthem" is none).
+   "all" is true when an approve word is followed by "all" (or "them all", "these all", "it all"), or "all" is
    followed by an approve word (or "all are approved", "all is approved"). "cards" is true when an approve word is
    followed by "card" or "cards" with, between them, optionally one of "the", "all", "these" and then optionally
    "held" ("approve the held cards"); or "card"/"cards" (optionally then "are") is followed by an approve word.
-   Both are read after rules 1-2, and the words in each pattern are separated only by whitespace: a number or a
-   mark between them breaks the pattern ("approve 1 cards", "approve, all" and "all 3 approved" count neither).
+   Both are read after rules 1-2, and the words in each pattern are separated by at least one whitespace character
+   and nothing else: a number or a mark between them breaks the pattern ("approve 1 cards", "approve, all" and
+   "all 3 approved" count neither), and so does no gap at all ("approveall", "approvedthem all", "cardsapproved").
 11. read_row(text) returns exactly {"checked_by": "deterministic_precheck", "style", "verdicts", "all", "cards",
    "approve_words", "deny_words"}: approve_words and deny_words say whether any verdict word of that kind was read.
 12. Identities. item_ikid(item) returns the 4-digit identity typed after "IKID" (spaces and one "#" may sit
@@ -122,6 +137,14 @@ def test_each_number_takes_the_verdict_typed_for_it():
         assert vr.read_row(f"1 approve - {word} later")["deny_words"] is False, word
     for word in ("skipper", "dropbox", "rejection"):
         assert vr.read_row(f"1 approve - {word}")["deny_words"] is True, word
+    for word in ("skipper8", "dropped3", "drop_it", "rejected_2", "declined9", "skip_this", "dropbox12"):
+        assert vr.read_row(f"3 {word}")["verdicts"] == {3: {"verdict": "deny", "word": word}}, word
+    assert vr.read_row("4 drop_it, 5 approve")["verdicts"] == {4: {"verdict": "deny", "word": "drop_it"},
+                                                              5: {"verdict": "approve", "word": "approve"}}
+    for word in ("hold_on", "no_way", "approve_it", "not2", "approved_x"):
+        row = vr.read_row(f"3 {word}")
+        assert row["verdicts"] == {3: {"verdict": "none", "word": None}}, word
+        assert row["approve_words"] is False and row["deny_words"] is False, word
     assert vr.read_row("approve 5 - 6 reject")["verdicts"] == {5: {"verdict": "approve", "word": "approve"},
                                                               6: {"verdict": "deny", "word": "reject"}}
 
@@ -137,22 +160,34 @@ def test_groups_and_ranges_share_one_verdict():
     assert sorted(vr.read_row("1-21 approve")["verdicts"]) == list(range(1, 22))
     assert sorted(vr.read_row("90-100 approve")["verdicts"]) == list(range(90, 101))
     for text in ("1-22 approve", "8-30 approve", "12-8 approve", "3-3 approve", "approve 1000", "approve 2-1",
-                 "approve 3-3", "approve 1-22"):
+                 "approve 3-3", "approve 1-22", "8-123 approve"):
         assert vr.read_row(text)["verdicts"] == {}, text
+    for text in ("8-1230 approve", "approve 8-1230"):
+        assert vr.read_row(text)["verdicts"] == {8: {"verdict": "approve", "word": "approve"}}, text
     assert all(verdict("approve 1-2", n) == "approve" for n in (1, 2))
     assert vr.read_row("reject 1, approve 1-2")["verdicts"] == {1: {"verdict": "deny", "word": "reject"},
                                                                2: {"verdict": "approve", "word": "approve"}}
     assert verdict("approve 100", 100) == "approve"
     assert verdict("0 approve", 0) == "approve" and verdict("approve 00", 0) == "approve"
     assert verdict("approve 007", 7) == "approve" and all(verdict("0-3 reject", n) == "deny" for n in range(4))
-    for text in ("1 & 2 approve", "1+2 approve", "1 / 2 approve", "1, 2 and 3 approve"):
+    assert vr.read_row("approve 1, and 2 reject, approve 3")["verdicts"] == {
+        n: {"verdict": "approve", "word": "approve"} for n in (1, 2, 3)}
+    for text in ("1 & 2 approve", "1+2 approve", "1 / 2 approve", "1, 2 and 3 approve", "1 ,& 2 approve"):
         assert verdict(text, 1) == "approve" and verdict(text, 2) == "approve", text
     assert vr.read_row("1 reject 4,5 approved")["verdicts"] == {1: {"verdict": "deny", "word": "reject"},
                                                                4: {"verdict": "approve", "word": "approved"},
                                                                5: {"verdict": "approve", "word": "approved"}}
     for text in ("approve item 4", "approve items 4 and 5", "approve the 4", "approve number 4",
-                 "approve numbers 4 and 5", "approve #4"):
+                 "approve numbers 4 and 5", "approve #4", "approve#4"):
         assert verdict(text, 4) == "approve", text
+    assert vr.read_row("approve#3 reject#4")["verdicts"] == {3: {"verdict": "approve", "word": "approve"},
+                                                            4: {"verdict": "deny", "word": "reject"}}
+    assert vr.read_row("skip#3 later")["verdicts"] == {3: {"verdict": "deny", "word": "skip"}}
+    for text in ("approve # 4", "reject #  4"):
+        assert vr.read_row(text)["verdicts"] == {4: {"verdict": "none", "word": None}}, text
+    assert vr.read_row("approve 1 # 2")["verdicts"] == {1: {"verdict": "approve", "word": "approve"},
+                                                       2: {"verdict": "none", "word": None}}
+    assert vr.read_row("reject # 3 approve")["verdicts"] == {3: {"verdict": "approve", "word": "approve"}}
     for text, numbers in (("approve #6 and #7", (6, 7)), ("approve #1, #2, #3", (1, 2, 3)),
                           ("approve #1 #2", (1, 2)), ("#2 #3 approve", (2, 3))):
         assert all(verdict(text, n) == "approve" for n in numbers), text
@@ -209,7 +244,8 @@ def test_all_and_cards_count_only_next_to_an_approve_word():
                  "approve held cards", "approve the held cards", "card approved", "cards are approved"):
         assert vr.read_row(text)["cards"], text
     for text in ("approve 1 cards", "approve, cards", "cards, approved", "approve 1 all", "approve, all",
-                 "all, approved", "all 3 approved"):
+                 "all, approved", "all 3 approved", "approveall", "approvedthem all", "allapproved",
+                 "them allapproved", "approvecards", "cardsapproved", "approvethe held cards"):
         row = vr.read_row(text)
         assert not row["all"] and not row["cards"], text
 
@@ -221,6 +257,8 @@ def test_one_typed_letter_off_approve_approves():
                  "30 unapprove", "30 disapprove"):
         assert verdict(text, 30) != "approve", text
     assert vr.fix_approve_typos("needs approval - apprpve 3") == "needs approval - approve 3"
+    assert vr.fix_approve_typos("apprpveIKID 0970, apprpveX") == "apprpveIKID 0970, apprpveX"
+    assert vr.fix_approve_typos("APPRPVE 3") == "approve 3"
     assert vr.read_row("apprpve all")["all"]
 
 
